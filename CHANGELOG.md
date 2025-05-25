@@ -1,0 +1,1 @@
+This release contains the reusable mesa:host tools for LibreELEC builds. This package is downloaded and unpacked by the mesa-reusable package in the LibreELEC build when building with USE_REUSABLE="yes".
