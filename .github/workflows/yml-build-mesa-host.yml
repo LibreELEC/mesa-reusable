@@ -1,0 +1,187 @@
+name: yml-build-mesa-host
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: "set runs-on for host arch"
+        required: true
+        type: string
+      debug:
+        description: "Provide debug output from GHA run"
+        #default: no_debug
+        required: true
+        type: string
+      ephemeral:
+        description: "Target and build-root are ephemeral"
+        #default: ephemeral
+        required: true
+        type: string
+      upload_url:
+        description: "Release upload url"
+        required: true
+        type: string
+      buildcmd:
+        description: "build command to run"
+        #default: "make image"
+        required: true
+        type: string
+      gitref:
+        description: "git branch or hash to build"
+        #default: libreelec-13.0
+        required: true
+        type: string
+      group:
+        description: "concurrency group"
+        #default: Generic_x86_64-10_0
+        required: true
+        type: string
+      project:
+        description: "target project"
+        #default: Generic
+        required: true
+        type: string
+      arch:
+        description: "target arch"
+        #default: x86_64
+        required: true
+        type: string
+      device:
+        description: "target device"
+        default: ""
+        required: false
+        type: string
+      targetbuilddir:
+        description: "TARGETBUILDDIR"
+        #default: ""
+        required: true
+        type: string
+      version:
+        description: "version code used in TARGETBUILDDIR"
+        required: true
+        type: string
+      mesa:
+        description: "mesa version we are building"
+        required: true
+        type: string
+
+env:
+  BASEDIR: /var/media/DATA/github-actions
+  # Distro Target Variables
+  PROJECT: ${{ inputs.project }}
+  ARCH: ${{ inputs.arch }}
+  DEVICE: ${{ inputs.device }}
+  TARGETBUILDDIR: ${{ inputs.targetbuilddir }}
+  LE_DISTRO_VERSION: ${{ inputs.version }}
+  MESA_VERSION: ${{ inputs.mesa }}
+
+concurrency:
+  group: ${{ inputs.group }}
+  cancel-in-progress: false
+
+jobs:
+  build_image:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: write
+
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.gitref }}
+          fetch-depth: 2
+          repository: "${{ github.repository_owner }}/LibreELEC.tv"
+          path: "LibreELEC.tv"
+
+      - name: Customise the checked out git repository
+        run: |
+          cd LibreELEC.tv
+          sed -i -e "s/RUN useradd docker/RUN useradd docker -o -u $(id -u)/" tools/docker/noble/Dockerfile
+          sed -i -e 's/BUILD_REUSABLE=""/BUILD_REUSABLE="mesa:host"/' distributions/LibreELEC/options
+
+      - name: Create docker image for build - tools/docker/noble
+        run: |
+          cd LibreELEC.tv
+          docker build --pull -t gh-${{ github.run_id }} tools/docker/noble
+
+      - name: Prepare the LibreELEC.tv directory - do not leave files behind
+        if: inputs.ephemeral == 'ephemeral'
+        run: |
+          cd LibreELEC.tv
+          # set the build_dir=/build
+          echo "build_dir=/build" >> $GITHUB_ENV
+          echo "CCACHE_DISABLE=1" >> $GITHUB_ENV
+
+      - name: Display environment
+        if: inputs.debug == 'debug'
+        run: |
+          cd LibreELEC.tv
+          echo "pwd: $(pwd)"
+          echo "id: $(id)"
+          echo "whoami: $(whoami)"
+          echo "docker images: $(docker images)"
+          echo ""
+          echo "inputs.debug: ${{ inputs.debug }}"
+          echo "inputs.ephemeral: ${{ inputs.ephemeral }}"
+
+      - name: Build LE in docker container
+        run: |
+          cd LibreELEC.tv
+          docker run --rm -v `pwd`:/build \
+                          -w /build -i \
+                          -e PROJECT=${{ env.PROJECT }} \
+                          -e ARCH=${{ env.ARCH }} \
+                          -e DEVICE=${{ env.DEVICE }} \
+                          -e ONELOG=no -e LOGCOMBINE=fail \
+                          -e BUILD_DIR=${{ env.build_dir }} \
+                          -e BUILD_PERIODIC=nightly \
+                          -e CCACHE_DISABLE=${{ env.CCACHE_DISABLE }} \
+                          gh-${{ github.run_id }} ${{ inputs.buildcmd }} ${{ env.NOOBS }}
+        continue-on-error: true
+
+      - name: Prepare artifacts - ephemeral
+        if: inputs.ephemeral == 'ephemeral'
+        run: |
+          cd LibreELEC.tv
+          mkdir -p ${{ env.TARGETBUILDDIR }}/artifact
+          grep ^FAIL ${{ env.TARGETBUILDDIR }}/.threads/joblog | \
+            awk '{ print $5, $12 }' | tr ':' '_' | \
+              while read failedpkg failedlog; do
+                mv $(echo ${failedlog} | sed 's#/build/##') \
+                  ${{ env.TARGETBUILDDIR }}/artifact/${{ env.TARGETBUILDDIR }}-${failedpkg}-$(echo ${failedlog} | sed 's#.*/##')
+              done
+
+      - name: Upload failed artifacts - ephemeral
+        if: inputs.ephemeral == 'ephemeral'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.group }}-failed
+          path: LibreELEC.tv/${{ env.TARGETBUILDDIR }}/artifact/
+          if-no-files-found: ignore
+
+      - name: Clean up - remove docker image tag
+        run: |
+          cd LibreELEC.tv
+          docker image rm -f gh-${{ github.run_id }}
+
+      - name: List files in target
+        run: |
+          cd LibreELEC.tv
+          ls -lah target/
+
+      - name: upload reusable mesa:host tools
+        uses: shogo82148/actions-upload-release-asset@v1
+        with:
+          upload_url: ${{ inputs.upload_url }}
+          asset_path: LibreELEC.tv/target/mesa-reusable-${{ inputs.version }}-${{ inputs.mesa }}-${{ inputs.arch }}.tar
+          asset_content_type: application/tar
+          github_token: ${{ github.token }}
+
+      - name: upload reusable mesa:host tools sha256
+        uses: shogo82148/actions-upload-release-asset@v1
+        with:
+          upload_url: ${{ inputs.upload_url }}
+          asset_path: LibreELEC.tv/target/mesa-reusable-${{ inputs.version }}-${{ inputs.mesa }}-${{ inputs.arch }}.tar.sha256
+          asset_content_type: text/plain
+          github_token: ${{ github.token }}
