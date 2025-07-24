@@ -63,6 +63,10 @@ on:
         description: "mesa version we are building"
         required: true
         type: string
+      buildos:
+        description: "docker image to build with"
+        required: true
+        type: string
 
 env:
   BASEDIR: /var/media/DATA/github-actions
@@ -73,6 +77,7 @@ env:
   TARGETBUILDDIR: ${{ inputs.targetbuilddir }}
   LE_DISTRO_VERSION: ${{ inputs.version }}
   MESA_VERSION: ${{ inputs.mesa }}
+  BUILD_OS: ${{ inputs.buildos }}
 
 concurrency:
   group: ${{ inputs.group }}
@@ -97,13 +102,15 @@ jobs:
       - name: Customise the checked out git repository
         run: |
           cd LibreELEC.tv
+          sed -i -e "s/RUN adduser/RUN adduser --uid $(id -u)/" tools/docker/jammy/Dockerfile
           sed -i -e "s/RUN useradd docker/RUN useradd docker -o -u $(id -u)/" tools/docker/noble/Dockerfile
           sed -i -e 's/BUILD_REUSABLE=""/BUILD_REUSABLE="mesa:host"/' distributions/LibreELEC/options
 
-      - name: Create docker image for build - tools/docker/noble
+      - name: Create docker image for build
         run: |
           cd LibreELEC.tv
-          docker build --pull -t gh-${{ github.run_id }} tools/docker/noble
+          echo "Building with ${{ env.BUILD_OS }}"
+          docker build --pull -t gh-${{ github.run_id }} tools/docker/${{ env.BUILD_OS }}
 
       - name: Prepare the LibreELEC.tv directory - do not leave files behind
         if: inputs.ephemeral == 'ephemeral'

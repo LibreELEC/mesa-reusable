@@ -7,6 +7,14 @@ on:
         default: master
         required: true
         type: string
+      buildos:
+        description: "docker image to build with"
+        default: noble
+        required: true
+        type: choice
+        options:
+          - jammy
+          - noble
       target:
         description: "targets to build"
         default: all
@@ -131,9 +139,10 @@ jobs:
       project: Amlogic
       arch: aarch64
       device: AMLGX
-      targetbuilddir: build.LibreELEC-AMLGX.aarch64-13.0-devel
+      targetbuilddir: build.LibreELEC-AMLGX.aarch64
       version: ${{ needs.check_build_tools.outputs.osver }}
       mesa: ${{ needs.check_build_tools.outputs.mesa }}
+      buildos: ${{ github.event.inputs.buildos }}
     secrets: inherit
 
   # x86_64 (use Amlogic to do the build of mesa)
@@ -158,7 +167,8 @@ jobs:
       project: Generic
       arch: x86_64
       device: Generic
-      targetbuilddir: build.LibreELEC-Generic.x86_64-13.0-devel
+      targetbuilddir: build.LibreELEC-Generic.x86_64
       version: ${{ needs.check_build_tools.outputs.osver }}
       mesa: ${{ needs.check_build_tools.outputs.mesa }}
+      buildos: ${{ github.event.inputs.buildos }}
     secrets: inherit
