@@ -171,17 +171,84 @@ jobs:
           path: LibreELEC.tv/${{ env.TARGETBUILDDIR }}/artifact/
           if-no-files-found: ignore
 
+      - name: Collect failed build information
+        id: failures
+        run: |
+          joblog="LibreELEC.tv/${{ env.TARGETBUILDDIR }}/.threads/joblog"
+          failed_lines=$(grep ^FAIL "${joblog}" 2>/dev/null || true)
+          title="${{ env.PROJECT }}.${{ env.ARCH }}-mesa-${{ env.MESA_VERSION }}"
+          if [ -z "${failed_lines}" ]; then
+            echo "has_failures=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          planfile="${joblog%/joblog}/plan.json"
+          total=$(python3 -c "import json; print(len(json.load(open('${planfile}'))))" 2>/dev/null)
+          [ -z "${total}" ] && total=$(wc -l < "${joblog}" | tr -d ' ')
+          artifactdir="LibreELEC.tv/${{ env.TARGETBUILDDIR }}/artifact"
+          text="*${title}* (${{ env.LE_DISTRO_VERSION }})\n"
+          while IFS= read -r line; do
+            step=$(awk '{ print $2 }' <<< "${line}")
+            pkg=$(awk '{ print $5 }' <<< "${line}")
+            logpath=$(awk '{ print $12 }' <<< "${line}")
+            pkgsafe="${pkg//:/_}"
+            logfile="${artifactdir}/${{ env.TARGETBUILDDIR }}-${pkgsafe}-$(basename "${logpath}")"
+            text+="step [${step}/${total}] ${pkg}\n"
+            if [ -f "${logfile}" ]; then
+              logtail=$(tail -50 "${logfile}")
+              if echo "${logtail}" | grep -qE "^FAILED:|command not found"; then
+                reason="BUILD"
+              else
+                reason=$(echo "${logtail}" | grep -ohE "APPLY PATCH|CONFIGURE|CMAKE|UNPACK" | tail -1)
+              fi
+              if [ -z "${reason}" ]; then
+                reason=$(echo "${logtail}" | grep -oE "cannot stat '[^']+'" | tail -1 | sed "s|cannot stat '||;s|.*/||;s|'||")
+              fi
+              [ -n "${reason}" ] && text+="reason for failure - ${reason}\n"
+            fi
+          done <<< "${failed_lines}"
+          text+="<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+          {
+            echo "has_failures=true"
+            echo "text<<EOF"
+            echo "${text}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Notify failed mesa builds
+        if: steps.failures.outputs.has_failures == 'true'
+        uses: slackapi/slack-github-action@v3
+        with:
+          webhook: ${{ secrets.ADDONS_REPO_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            username: "ADDON Bot"
+            icon_emoji: ":ghost:"
+            channel: "${{ secrets.ADDONS_REPO_WEBHOOK_CHANNEL }}"
+            blocks:
+              - type: header
+                text:
+                  type: plain_text
+                  text: ":red_circle: Build failures"
+                  emoji: true
+              - type: section
+                text:
+                  type: mrkdwn
+                  text: "${{ steps.failures.outputs.text }}"
+
       - name: Clean up - remove docker image tag
+        if: always()
         run: |
           cd LibreELEC.tv
           docker image rm -f gh-${{ github.run_id }}
 
       - name: List files in target
+        if: steps.failures.outputs.has_failures != 'true'
         run: |
           cd LibreELEC.tv
           ls -lah target/
 
       - name: upload reusable mesa:host tools
+        if: steps.failures.outputs.has_failures != 'true'
         uses: shogo82148/actions-upload-release-asset@v1
         with:
           upload_url: ${{ inputs.upload_url }}
@@ -190,9 +257,31 @@ jobs:
           github_token: ${{ github.token }}
 
       - name: upload reusable mesa:host tools sha256
+        if: steps.failures.outputs.has_failures != 'true'
         uses: shogo82148/actions-upload-release-asset@v1
         with:
           upload_url: ${{ inputs.upload_url }}
           asset_path: LibreELEC.tv/target/mesa-reusable-${{ inputs.version }}-${{ inputs.mesa }}-${{ inputs.arch }}.tar.sha256
           asset_content_type: text/plain
           github_token: ${{ github.token }}
+
+      - name: Notify job failure
+        if: failure() && steps.failures.outputs.has_failures != 'true'
+        uses: slackapi/slack-github-action@v3
+        with:
+          webhook: ${{ secrets.ADDONS_REPO_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            username: "ADDON Bot"
+            icon_emoji: ":ghost:"
+            channel: "${{ secrets.ADDONS_REPO_WEBHOOK_CHANNEL }}"
+            blocks:
+              - type: header
+                text:
+                  type: plain_text
+                  text: ":red_circle: Job failed"
+                  emoji: true
+              - type: section
+                text:
+                  type: mrkdwn
+                  text: "*${{ inputs.group }}*\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
