@@ -139,8 +139,8 @@ jobs:
       group: aarch64-mesa
       project: Amlogic
       arch: aarch64
-      device: AMLGX
-      targetbuilddir: build.LibreELEC-AMLGX.aarch64
+      device: Amlogic
+      targetbuilddir: build.LibreELEC-Amlogic.aarch64
       version: ${{ needs.check_build_tools.outputs.osver }}
       mesa: ${{ needs.check_build_tools.outputs.mesa }}
       buildos: ${{ github.event.inputs.buildos }}
